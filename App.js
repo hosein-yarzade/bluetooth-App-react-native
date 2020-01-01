@@ -1,76 +1,154 @@
-import React, {Component} from 'react';
-import {Platform, StyleSheet, Text, View, PermissionsAndroid, TouchableOpacity} from 'react-native';
-import {BleManager} from 'react-native-ble-plx';
+// import React, {Component} from 'react';
+// import {Platform, StyleSheet, Text, View, PermissionsAndroid, TouchableOpacity} from 'react-native';
+// import {BleManager} from 'react-native-ble-plx';
 
-export async function requestLocationPermission() {
-    try {
-        const granted = await PermissionsAndroid.request(
-            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION, {
-                title: 'Location permission for bluetooth scanning',
-                message: 'wahtever',
-                buttonNeutral: 'Ask Me Later',
-                buttonNegative: 'Cancel',
-                buttonPositive: 'OK',
-            },
-        );
-        if (granted === PermissionsAndroid.RESULTS.GRANTED) {
-            console.log('Location permission for bluetooth scanning granted');
-            return true;
-        } else {
-            console.log('Location permission for bluetooth scanning revoked');
-            return false;
+import React, { Component } from 'react';
+import {
+    Platform,
+    StyleSheet,
+    Text,
+    View,
+    Button,
+    FlatList,
+    Switch,
+    TouchableOpacity,
+    ToastAndroid
+} from 'react-native';
+var _ = require('lodash');
+import BluetoothSerial from 'react-native-bluetooth-serial'
+
+export default class App extends Component<{}> {
+    constructor (props) {
+        super(props)
+        this.state = {
+            isEnabled: false,
+            discovering: false,
+            devices: [],
+            unpairedDevices: [],
+            connected: false,
         }
-    } catch (err) {
-        console.warn(err);
-        return false;
     }
-}
+    componentWillMount(){
 
-export default class App extends Component<Props> {
+        Promise.all([
+            BluetoothSerial.isEnabled(),
+            BluetoothSerial.list()
+        ])
+            .then((values) => {
+                const [ isEnabled, devices ] = values
 
-    constructor() {
-        super();
-        this.manager = new BleManager();
+                this.setState({ isEnabled, devices })
+            })
+
+        BluetoothSerial.on('bluetoothEnabled', () => {
+
+            Promise.all([
+                BluetoothSerial.isEnabled(),
+                BluetoothSerial.list()
+            ])
+                .then((values) => {
+                    const [ isEnabled, devices ] = values
+                    this.setState({  devices })
+                })
+
+            BluetoothSerial.on('bluetoothDisabled', () => {
+
+                this.setState({ devices: [] })
+
+            })
+            BluetoothSerial.on('error', (err) => console.log(`Error: ${err.message}`))
+
+        })
+
+    }
+    connect (device) {
+        this.setState({ connecting: true })
+        BluetoothSerial.connect(device.id)
+            .then((res) => {
+                console.log(`Connected to device ${device.name}`);
+
+                ToastAndroid.show(`Connected to device ${device.name}`, ToastAndroid.SHORT);
+            })
+            .catch((err) => console.log((err.message)))
+    }
+    _renderItem(item){
+
+        return(<TouchableOpacity onPress={() => this.connect(item.item)}>
+            <View style={styles.deviceNameWrap}>
+                <Text style={styles.deviceName}>{ item.item.name ? item.item.name : item.item.id }</Text>
+            </View>
+        </TouchableOpacity>)
+    }
+    enable () {
+        BluetoothSerial.enable()
+            .then((res) => this.setState({ isEnabled: true }))
+            .catch((err) => Toast.showShortBottom(err.message))
     }
 
-    componentWillMount() {
-
+    disable () {
+        BluetoothSerial.disable()
+            .then((res) => this.setState({ isEnabled: false }))
+            .catch((err) => Toast.showShortBottom(err.message))
     }
 
-    allowConnect = () => {
-        requestLocationPermission()
-    };
-    scanAndConnect = () => {
+    toggleBluetooth (value) {
+        if (value === true) {
+            this.enable()
+        } else {
+            this.disable()
+        }
+    }
+    discoverAvailableDevices () {
 
-        this.manager.startDeviceScan(null, null, (error, device) => {
-            if (error) {
-                // Handle error (scanning will be stopped automatically)
-                alert('error', error);
-                console.log(error);
-                return
-            }
-
-            // Check if it is a device you are looking for based on advertisement data
-            // or other criteria.
-            if (device.name === 'TI BLE Sensor Tag' ||
-                device.name === 'SensorTag') {
-                // Stop scanning as it's not necessary if you are scanning for one device.
-                this.manager.stopDeviceScan();
-                // Proceed with connection.
-            }
-        });
-    };
-
+        if (this.state.discovering) {
+            return false
+        } else {
+            this.setState({ discovering: true })
+            BluetoothSerial.discoverUnpairedDevices()
+                .then((unpairedDevices) => {
+                    const uniqueDevices = _.uniqBy(unpairedDevices, 'id');
+                    console.log(uniqueDevices);
+                    this.setState({ unpairedDevices: uniqueDevices, discovering: false })
+                })
+                .catch((err) => console.log(err.message))
+        }
+    }
+    toggleSwitch(){
+        BluetoothSerial.write("!LED6OFF@")
+            .then((res) => {
+                this.setState({ connected: true })
+            })
+            .catch((err) => console.log(err.message))
+    }
     render() {
+
         return (
             <View style={styles.container}>
-                <Text style={styles.welcome}>Welcome to React Native!</Text>
-                <TouchableOpacity onPress={this.allowConnect}>
-                    <Text>Allow</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={this.scanAndConnect}>
-                    <Text>search BlueTooth</Text>
-                </TouchableOpacity>
+                <View style={styles.toolbar}>
+                    <Text style={styles.toolbarTitle}>Bluetooth Device List</Text>
+                    <View style={styles.toolbarButton}>
+                        <Switch
+                            value={this.state.isEnabled}
+                            onValueChange={(val) => this.toggleBluetooth(val)}
+                        />
+                    </View>
+                </View>
+                <Button
+                    onPress={this.discoverAvailableDevices.bind(this)}
+                    title="Scan for Devices"
+                    color="#841584"
+                />
+                <FlatList
+                    style={{flex:1}}
+                    data={this.state.devices}
+                    keyExtractor={item => item.id}
+                    renderItem={(item) => this._renderItem(item)}
+                />
+                <Button
+                    onPress={this.toggleSwitch.bind(this)}
+                    title="Switch(On/Off)"
+                    color="#841584"
+                />
             </View>
         );
     }
@@ -79,18 +157,32 @@ export default class App extends Component<Props> {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
         backgroundColor: '#F5FCFF',
     },
-    welcome: {
+    toolbar:{
+        paddingTop:30,
+        paddingBottom:30,
+        flexDirection:'row'
+    },
+    toolbarButton:{
+        width: 50,
+        marginTop: 8,
+    },
+    toolbarTitle:{
+        textAlign:'center',
+        fontWeight:'bold',
         fontSize: 20,
-        textAlign: 'center',
+        flex:1,
+        marginTop:6
+    },
+    deviceName: {
+        fontSize: 17,
+        color: "black"
+    },
+    deviceNameWrap: {
         margin: 10,
-    },
-    instructions: {
-        textAlign: 'center',
-        color: '#333333',
-        marginBottom: 5,
-    },
+        borderBottomWidth:1
+    }
 });
+
+
